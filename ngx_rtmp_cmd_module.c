@@ -8,6 +8,7 @@
 #include <ngx_core.h>
 #include "ngx_rtmp_cmd_module.h"
 #include "ngx_rtmp_streams.h"
+#include "ngx_rtmp_authen_module.h"
 
 
 #define NGX_RTMP_FMS_VERSION        "FMS/3,0,1,123"
@@ -51,7 +52,11 @@ ngx_rtmp_create_stream_pt   ngx_rtmp_create_stream;
 ngx_rtmp_close_stream_pt    ngx_rtmp_close_stream;
 ngx_rtmp_delete_stream_pt   ngx_rtmp_delete_stream;
 ngx_rtmp_publish_pt         ngx_rtmp_publish;
+ngx_rtmp_fcpublish_pt       ngx_rtmp_fcpublish;
+ngx_rtmp_fcunpublish_pt     ngx_rtmp_fcunpublish;
 ngx_rtmp_play_pt            ngx_rtmp_play;
+ngx_rtmp_fcsubscribe_pt     ngx_rtmp_fcsubscribe;
+ngx_rtmp_fcunsubscribe_pt   ngx_rtmp_fcunsubscribe;
 ngx_rtmp_seek_pt            ngx_rtmp_seek;
 ngx_rtmp_pause_pt           ngx_rtmp_pause;
 
@@ -205,6 +210,16 @@ ngx_rtmp_cmd_connect(ngx_rtmp_session_t *s, ngx_rtmp_connect_t *v)
     static double               capabilities = NGX_RTMP_CAPABILITIES;
     static double               object_encoding = 0;
 
+    u_char                     *level_status  = (u_char*)"status";
+    u_char                     *level_error   = (u_char*)"error";
+    u_char                     *code_success  = (u_char*)"NetConnection.Connect.Success";
+    u_char                     *code_rejected = (u_char*)"NetConnection.Connect.Rejected";
+    u_char                     *desc_success  = (u_char*)"Connection succeeded.";
+    u_char *res;
+
+    ngx_int_t                   ret = NGX_OK;
+    ngx_rtmp_authen_ctx_t      *authen_ctx;
+
     static ngx_rtmp_amf_elt_t  out_obj[] = {
 
         { NGX_RTMP_AMF_STRING,
@@ -235,6 +250,22 @@ ngx_rtmp_cmd_connect(ngx_rtmp_session_t *s, ngx_rtmp_connect_t *v)
           &object_encoding, 0 }
     };
 
+    authen_ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_authen_module);
+
+    if (authen_ctx && authen_ctx->conn_status != NGX_RTMP_CONN_ALLOW) {
+        out_inf[0].data = level_error;
+        out_inf[1].data = code_rejected;
+        out_inf[2].data = authen_ctx->conn_desc.len > 0 ?
+                authen_ctx->conn_desc.data : (u_char*)"[ AccessManager.Reject ]";
+        ret = NGX_ERROR;
+        res = (u_char*)"_error";
+    } else {
+        out_inf[0].data = level_status;
+        out_inf[1].data = code_success;
+        out_inf[2].data = desc_success;
+        res = (u_char*)"_result";
+    }
+
     static ngx_rtmp_amf_elt_t  out_elts[] = {
 
         { NGX_RTMP_AMF_STRING,
@@ -254,6 +285,8 @@ ngx_rtmp_cmd_connect(ngx_rtmp_session_t *s, ngx_rtmp_connect_t *v)
           out_inf, sizeof(out_inf) },
     };
 
+    out_elts[0].data = res;
+
     if (s->connected) {
         ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
                 "connect: duplicate connection");
@@ -262,6 +295,16 @@ ngx_rtmp_cmd_connect(ngx_rtmp_session_t *s, ngx_rtmp_connect_t *v)
 
     cscf = ngx_rtmp_get_module_srv_conf(s, ngx_rtmp_core_module);
 
+    ngx_rtmp_cmd_fill_args(v->app, v->args);
+/*
+    ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
+            "connect: app='%s' args='%s' flashver='%s' swf_url='%s' "
+            "tc_url='%s' page_url='%s' acodecs=%uD vcodecs=%uD "
+            "object_encoding=%ui",
+            v->app, v->args, v->flashver, v->swf_url, v->tc_url, v->page_url,
+            (uint32_t)v->acodecs, (uint32_t)v->vcodecs,
+            (ngx_int_t)v->object_encoding);
+*/
     trans = v->trans;
 
     /* fill session parameters */
@@ -271,6 +314,7 @@ ngx_rtmp_cmd_connect(ngx_rtmp_session_t *s, ngx_rtmp_connect_t *v)
     h.csid = NGX_RTMP_CSID_AMF_INI;
     h.type = NGX_RTMP_MSG_AMF_CMD;
 
+    if (authen_ctx == NULL) {
 
 #define NGX_RTMP_SET_STRPAR(name)                                             \
     s->name.len = ngx_strlen(v->name);                                        \
@@ -293,6 +337,7 @@ ngx_rtmp_cmd_connect(ngx_rtmp_session_t *s, ngx_rtmp_connect_t *v)
 
     s->acodecs = (uint32_t) v->acodecs;
     s->vcodecs = (uint32_t) v->vcodecs;
+    }
 
     /* find application & set app_conf */
     cacfp = cscf->applications.elts;
@@ -509,10 +554,159 @@ ngx_rtmp_cmd_publish_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
     return ngx_rtmp_publish(s, &v);
 }
 
-
 static ngx_int_t
 ngx_rtmp_cmd_publish(ngx_rtmp_session_t *s, ngx_rtmp_publish_t *v)
 {
+    ngx_rtmp_header_t               h;
+
+    static double                   trans;
+
+    static ngx_rtmp_amf_elt_t      out_inf[] = {
+
+        { NGX_RTMP_AMF_STRING,
+          ngx_string("level"),
+          "status", 0 },
+
+        { NGX_RTMP_AMF_STRING,
+          ngx_string("code"),
+          "NetStream.Publish.Start", 0 },
+
+        { NGX_RTMP_AMF_STRING,
+          ngx_string("description"),
+          "Publish succeeded.", 0 },
+    };
+
+    static ngx_rtmp_amf_elt_t      out_elts[] = {
+
+        { NGX_RTMP_AMF_STRING,
+          ngx_null_string,
+          "onStatus", 0 },
+
+        { NGX_RTMP_AMF_NUMBER,
+          ngx_null_string,
+          &trans, 0 },
+
+        { NGX_RTMP_AMF_NULL,
+          ngx_null_string,
+          NULL, 0 },
+
+        { NGX_RTMP_AMF_OBJECT,
+          ngx_null_string,
+          out_inf, sizeof(out_inf) },
+    };
+
+    ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
+            "publish: name='%s' args='%s' type=%s silent=%d",
+            v->name, v->args, v->type, v->silent);
+
+    if (v->silent) {
+        return NGX_OK;
+    }
+
+    /* send onStatus reply */
+    memset(&h, 0, sizeof(h));
+    h.type = NGX_RTMP_MSG_AMF_CMD;
+    h.csid = NGX_RTMP_CSID_AMF;
+    h.msid = NGX_RTMP_MSID;
+
+    if (ngx_rtmp_send_amf(s, &h, out_elts,
+                sizeof(out_elts) / sizeof(out_elts[0])) != NGX_OK)
+    {
+        return NGX_ERROR;
+    }
+
+    return NGX_OK;
+}
+
+
+static ngx_int_t
+ngx_rtmp_cmd_fcpublish_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
+        ngx_chain_t *in)
+{
+    static ngx_rtmp_fcpublish_t     v;
+
+    static ngx_rtmp_amf_elt_t      in_elts[] = {
+
+        /* transaction is always 0 */
+        { NGX_RTMP_AMF_NUMBER,
+          ngx_null_string,
+          NULL, 0 },
+
+        { NGX_RTMP_AMF_STRING,
+          ngx_null_string,
+          &v.name, sizeof(v.name) },
+    };
+
+    ngx_memzero(&v, sizeof(v));
+
+    /* parse input */
+    if (ngx_rtmp_receive_amf(s, in, in_elts,
+                sizeof(in_elts) / sizeof(in_elts[0])))
+    {
+        return NGX_ERROR;
+    }
+
+    return ngx_rtmp_fcpublish
+        ? ngx_rtmp_fcpublish(s, &v)
+        : NGX_OK;
+}
+
+static ngx_int_t
+ngx_rtmp_cmd_fcpublish(ngx_rtmp_session_t *s, ngx_rtmp_fcpublish_t *v)
+{
+    ngx_rtmp_header_t               h;
+
+    static double                   trans;
+
+    static ngx_rtmp_amf_elt_t      out_inf[] = {
+
+        { NGX_RTMP_AMF_STRING,
+          ngx_string("code"),
+          "NetStream.Publish.Start", 0 },
+
+        { NGX_RTMP_AMF_STRING,
+          ngx_string("level"),
+          "status", 0 },
+
+        { NGX_RTMP_AMF_STRING,
+          ngx_string("description"),
+          "FCPublish succeeded.", 0 },
+    };
+
+    static ngx_rtmp_amf_elt_t      out_elts[] = {
+
+        { NGX_RTMP_AMF_STRING,
+          ngx_null_string,
+          "onFCPublish", 0 },
+
+        { NGX_RTMP_AMF_NUMBER,
+          ngx_null_string,
+          &trans, 0 },
+
+        { NGX_RTMP_AMF_NULL,
+          ngx_null_string,
+          NULL, 0 },
+
+        { NGX_RTMP_AMF_OBJECT,
+          ngx_null_string,
+          out_inf, sizeof(out_inf) },
+    };
+
+    ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
+            "fcpublish: name='%s'", v->name);
+
+    /* send onFCPublish reply */
+    memset(&h, 0, sizeof(h));
+    h.type = NGX_RTMP_MSG_AMF_CMD;
+    h.csid = NGX_RTMP_CSID_AMF;
+    h.msid = NGX_RTMP_MSID;
+
+    if (ngx_rtmp_send_amf(s, &h, out_elts,
+                sizeof(out_elts) / sizeof(out_elts[0])) != NGX_OK)
+    {
+        return NGX_ERROR;
+    }
+
     return NGX_OK;
 }
 
@@ -577,6 +771,98 @@ ngx_rtmp_cmd_play(ngx_rtmp_session_t *s, ngx_rtmp_play_t *v)
     return NGX_OK;
 }
 
+static ngx_int_t
+ngx_rtmp_cmd_fcsubscribe_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
+        ngx_chain_t *in)
+{
+    static ngx_rtmp_fcsubscribe_t   v;
+
+    static ngx_rtmp_amf_elt_t       in_elts[] = {
+
+        /* transaction is always 0 */
+        { NGX_RTMP_AMF_NUMBER,
+          ngx_null_string,
+          NULL, 0 },
+
+        { NGX_RTMP_AMF_STRING,
+          ngx_null_string,
+          &v.name, sizeof(v.name) },
+
+    };
+
+    ngx_memzero(&v, sizeof(v));
+
+    /* parse input */
+    if (ngx_rtmp_receive_amf(s, in, in_elts,
+                sizeof(in_elts) / sizeof(in_elts[0])))
+    {
+        return NGX_ERROR;
+    }
+
+    return ngx_rtmp_fcsubscribe
+        ? ngx_rtmp_fcsubscribe(s, &v)
+        : NGX_OK;
+}
+
+static ngx_int_t
+ngx_rtmp_cmd_fcsubscribe(ngx_rtmp_session_t *s, ngx_rtmp_fcsubscribe_t *v)
+{
+    ngx_rtmp_header_t               h;
+
+    static double                   trans;
+
+    static ngx_rtmp_amf_elt_t      out_inf[] = {
+
+        { NGX_RTMP_AMF_STRING,
+          ngx_string("code"),
+          "NetStream.Play.Start", 0 },
+
+        { NGX_RTMP_AMF_STRING,
+          ngx_string("level"),
+          "status", 0 },
+
+        { NGX_RTMP_AMF_STRING,
+          ngx_string("description"),
+          "Started playing.", 0 },
+    };
+
+    static ngx_rtmp_amf_elt_t      out_elts[] = {
+
+        { NGX_RTMP_AMF_STRING,
+          ngx_null_string,
+          "onFCSubscribe", 0 },
+
+        { NGX_RTMP_AMF_NUMBER,
+          ngx_null_string,
+          &trans, 0 },
+
+        { NGX_RTMP_AMF_NULL,
+          ngx_null_string,
+          NULL, 0 },
+
+        { NGX_RTMP_AMF_OBJECT,
+          ngx_null_string,
+          out_inf,
+          sizeof(out_inf) },
+    };
+
+    ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
+            "fcsubscribe: name='%s'", v->name);
+
+    /* send onFCSubscribe reply */
+    memset(&h, 0, sizeof(h));
+    h.type = NGX_RTMP_MSG_AMF_CMD;
+    h.csid = NGX_RTMP_CSID_AMF;
+    h.msid = NGX_RTMP_MSID;
+
+    if (ngx_rtmp_send_amf(s, &h, out_elts,
+                sizeof(out_elts) / sizeof(out_elts[0])) != NGX_OK)
+    {
+        return NGX_ERROR;
+    }
+
+    return NGX_OK;
+}
 
 static ngx_int_t
 ngx_rtmp_cmd_pause_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
@@ -729,7 +1015,11 @@ static ngx_rtmp_amf_handler_t ngx_rtmp_cmd_map[] = {
     { ngx_string("closeStream"),        ngx_rtmp_cmd_close_stream_init      },
     { ngx_string("deleteStream"),       ngx_rtmp_cmd_delete_stream_init     },
     { ngx_string("publish"),            ngx_rtmp_cmd_publish_init           },
+    { ngx_string("fcpublish"),          ngx_rtmp_cmd_fcpublish_init         },
+  /*{ ngx_string("fcunpublish"),        ngx_rtmp_cmd_fcunpublish_init       },*/
     { ngx_string("play"),               ngx_rtmp_cmd_play_init              },
+    { ngx_string("fcsubscribe"),        ngx_rtmp_cmd_fcsubscribe_init       },
+  /*{ ngx_string("fcunsubscribe"),      ngx_rtmp_cmd_fcunsubscribe_init     },*/
     { ngx_string("seek"),               ngx_rtmp_cmd_seek_init              },
     { ngx_string("pause"),              ngx_rtmp_cmd_pause_init             },
     { ngx_string("pauseraw"),           ngx_rtmp_cmd_pause_init             },
@@ -778,7 +1068,11 @@ ngx_rtmp_cmd_postconfiguration(ngx_conf_t *cf)
     ngx_rtmp_close_stream = ngx_rtmp_cmd_close_stream;
     ngx_rtmp_delete_stream = ngx_rtmp_cmd_delete_stream;
     ngx_rtmp_publish = ngx_rtmp_cmd_publish;
+    ngx_rtmp_fcpublish = ngx_rtmp_cmd_fcpublish;
+  /*ngx_rtmp_fcunpublish = ngx_rtmp_cmd_fcunpublish;*/
     ngx_rtmp_play = ngx_rtmp_cmd_play;
+    ngx_rtmp_fcsubscribe = ngx_rtmp_cmd_fcsubscribe;
+  /*ngx_rtmp_fcunsubscribe = ngx_rtmp_cmd_fcunsubsrcibe;*/
     ngx_rtmp_seek = ngx_rtmp_cmd_seek;
     ngx_rtmp_pause = ngx_rtmp_cmd_pause;
 

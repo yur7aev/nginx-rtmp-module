@@ -61,6 +61,15 @@ typedef struct {
 
 typedef struct {
     u_char                          name[NGX_RTMP_MAX_NAME];
+} ngx_rtmp_fcpublish_t;
+
+typedef ngx_rtmp_fcpublish_t ngx_rtmp_fcunpublish_t;
+typedef ngx_rtmp_fcpublish_t ngx_rtmp_fcsubscribe_t;
+typedef ngx_rtmp_fcpublish_t ngx_rtmp_fcunsubscribe_t;
+
+
+typedef struct {
+    u_char                          name[NGX_RTMP_MAX_NAME];
     u_char                          args[NGX_RTMP_MAX_ARGS];
     double                          start;
     double                          duration;
@@ -108,8 +117,16 @@ typedef ngx_int_t (*ngx_rtmp_delete_stream_pt)(ngx_rtmp_session_t *s,
         ngx_rtmp_delete_stream_t *v);
 typedef ngx_int_t (*ngx_rtmp_publish_pt)(ngx_rtmp_session_t *s,
         ngx_rtmp_publish_t *v);
+typedef ngx_int_t (*ngx_rtmp_fcpublish_pt)(ngx_rtmp_session_t *s,
+        ngx_rtmp_fcpublish_t *v);
+typedef ngx_int_t (*ngx_rtmp_fcunpublish_pt)(ngx_rtmp_session_t *s,
+        ngx_rtmp_fcunpublish_t *v);
 typedef ngx_int_t (*ngx_rtmp_play_pt)(ngx_rtmp_session_t *s,
         ngx_rtmp_play_t *v);
+typedef ngx_int_t (*ngx_rtmp_fcsubscribe_pt)(ngx_rtmp_session_t *s,
+        ngx_rtmp_fcsubscribe_t *v);
+typedef ngx_int_t (*ngx_rtmp_fcunsubscribe_pt)(ngx_rtmp_session_t *s,
+        ngx_rtmp_fcunsubscribe_t *v);
 typedef ngx_int_t (*ngx_rtmp_seek_pt)(ngx_rtmp_session_t *s,
         ngx_rtmp_seek_t *v);
 typedef ngx_int_t (*ngx_rtmp_pause_pt)(ngx_rtmp_session_t *s,
@@ -133,7 +150,11 @@ extern ngx_rtmp_create_stream_pt    ngx_rtmp_create_stream;
 extern ngx_rtmp_close_stream_pt     ngx_rtmp_close_stream;
 extern ngx_rtmp_delete_stream_pt    ngx_rtmp_delete_stream;
 extern ngx_rtmp_publish_pt          ngx_rtmp_publish;
+extern ngx_rtmp_fcpublish_pt        ngx_rtmp_fcpublish;
+extern ngx_rtmp_fcunpublish_pt      ngx_rtmp_fcunpublish;
 extern ngx_rtmp_play_pt             ngx_rtmp_play;
+extern ngx_rtmp_fcsubscribe_pt      ngx_rtmp_fcsubscribe;
+extern ngx_rtmp_fcunsubscribe_pt    ngx_rtmp_fcunsubscribe;
 extern ngx_rtmp_seek_pt             ngx_rtmp_seek;
 extern ngx_rtmp_pause_pt            ngx_rtmp_pause;
 
